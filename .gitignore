@@ -35,3 +35,7 @@ yarn-error.log*
 
 # Type coverage
 *.tsbuildinfo
+
+# Arc Studio sandbox runtime logs
+console.jsonl
+traces.jsonl

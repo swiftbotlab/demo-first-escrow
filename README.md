@@ -23,7 +23,7 @@ Client                    Contract                  Builder
   |                          |<------- withdraw() ------|
 ```
 
-The builder can also request a refund at any time by calling `cancel()`. The client can request changes during the review window, which resets the delivery status and extends the deadline by at least one review period.
+The builder can walk away at any time before release by calling `cancel()`, which refunds the client. During the review window the client can call `requestChanges()`: the escrow goes back to Funded and the delivery deadline moves to at least one review period from now, so the builder always has time to fix.
 
 ### State table
 
@@ -54,7 +54,7 @@ The builder can also request a refund at any time by calling `cancel()`. The cli
 
 ## Why pull payments
 
-On Arc, a native USDC transfer using `.call{value: amount}("")` can revert. An address on a blocklist or a precompile address will reject the transfer, and a hard-required push payout would permanently lock the escrow. To avoid this, settlement only credits a balance in `pendingWithdrawals[recipient]`. The actual native transfer happens in `withdraw()`, called at the recipient's discretion. If `withdraw()` reverts, no escrow state has changed and the recipient can retry later or from a different address by updating their withdrawal path through a UI.
+On Arc, a native USDC transfer using `.call{value: amount}("")` can revert. An address on a blocklist or a precompile address will reject the transfer, and a hard-required push payout would permanently lock the escrow. To avoid this, settlement only credits a balance in `pendingWithdrawals[recipient]`. The actual native transfer happens in `withdraw()`, called at the recipient's discretion. If `withdraw()` reverts, the balance simply stays credited to the recipient and they can retry later; no escrow is stuck and no other escrow is affected.
 
 ---
 
@@ -76,6 +76,8 @@ On Arc, a native USDC transfer using `.call{value: amount}("")` can revert. An a
 |---|---|---|
 | Arc Testnet | [`0xbb250819e407a108e652cbcf36b45efdd6a3e4c0`](https://explorer.testnet.arc.io/address/0xbb250819e407a108e652cbcf36b45efdd6a3e4c0) | [`0x72bdfc6e…`](https://explorer.testnet.arc.io/tx/0x72bdfc6e2c00e9b5ac5ed975f281a5bb731e8ec631995b719124a44f92039a0a) |
 | Arc Mainnet | coming soon | — |
+
+The testnet contract source is verified on the explorer (Blockscout): solc 0.8.28, optimizer 200 runs, EVM `paris`.
 
 ---
 
@@ -118,7 +120,7 @@ The Foundry test suite in `contracts/test/DemoFirstEscrow.t.sol` covers:
 - **Happy paths:** create → deliver → release → withdraw; create → miss deadline → refund → withdraw; claim after review window; requestChanges → redeliver → release; builder cancel (funded and delivered states).
 - **Revert paths:** all input validation errors (`ZeroValue`, `AmountTooLarge`, `ZeroAddress`, `SelfEscrow`, `InvalidDeadline`, `InvalidReviewPeriod`, `TitleEmpty`, `TitleTooLong`, `URIEmpty`, `URITooLong`, `NoteTooLong`); wrong-status reverts; deadline and review-window timing guards; access control on every role-gated function.
 - **Fuzz:** amount round-trip over the full `uint128` range; review period over `[60, 30 days]`.
-- **Invariant (128,000 sequences):** `address(contract).balance == totalLocked` holds after every state transition; accounting identity `totalLocked + totalReleased + totalRefunded` is consistent.
+- **Invariant (256 runs x 500 calls):** with a handler that settles and withdraws, `address(contract).balance == totalLocked` and the totals stay consistent.
 - **Reentrancy:** a malicious builder contract that calls `withdraw()` from its `receive()` is blocked by the inline `_locked` guard.
 
 ```bash
@@ -150,7 +152,7 @@ Open [http://localhost:5173](http://localhost:5173). The app reads from Arc Test
 
 - **No third-party arbiter.** Disputes are settled by the parties directly (client releases / builder cancels / deadline enforced automatically). There is no arbiter role by design — adding one would require custody of a private key or a separate governance contract.
 - **Not audited by a paid third party.** The contract has been reviewed with automated tools and a structured internal review, but has not been independently audited. Do not use with large sums without a professional audit.
-- **`escrowsOf` can be spammed.** Anyone who pays the gas to call `createEscrow` with your address as the builder will add an entry to your `escrowsOf` list. The list is append-only on-chain; the frontend already handles this gracefully by showing all entries, but clients should treat unsolicited escrows as noise.
+- **`escrowsOf` can be spammed.** Anyone who funds an escrow (any non-zero amount) naming your address as the builder adds an entry to your `escrowsOf` list. The list is append-only on-chain; treat escrows you did not agree to as noise.
 
 ---
 
