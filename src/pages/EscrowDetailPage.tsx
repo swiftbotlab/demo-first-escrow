@@ -44,6 +44,14 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
   const [logs, setLogs] = useState<EscrowLog[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
 
+  // Re-render once a second so time-gated actions (refund after the deadline, claim after the review window)
+  // enable the moment the clock crosses them, without a page reload.
+  const [, setClockTick] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setClockTick((t) => t + 1), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
   const chainRpc = net.chain.rpcUrls.default.http[0]
   const chainObj = net.chain
 
