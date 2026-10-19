@@ -2,7 +2,7 @@ import { ConnectKitButton } from 'connectkit'
 import { useSwitchChain, useAccount } from 'wagmi'
 import { ChevronDown, Zap } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
-import { NETWORKS, type NetworkKey } from '../config/networks'
+import { NETWORKS, NETWORK_KEYS, type NetworkKey } from '../config/networks'
 
 interface Props {
   networkKey: NetworkKey
@@ -109,7 +109,7 @@ export function Header({ networkKey, onNetworkChange, onNav, currentPage }: Prop
               className="absolute right-0 top-full mt-1 w-44 overflow-hidden rounded-xl border py-1 shadow-lg"
               style={{ background: 'var(--surface-strong)', borderColor: 'var(--border)' }}
             >
-              {(['testnet', 'mainnet'] as NetworkKey[]).map((k) => (
+              {NETWORK_KEYS.map((k) => (
                 <button
                   key={k}
                   onClick={() => handleNetworkSelect(k)}

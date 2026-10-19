@@ -5,25 +5,35 @@ import { HomePage } from './pages/HomePage'
 import { NewEscrowPage } from './pages/NewEscrowPage'
 import { MyEscrowsPage } from './pages/MyEscrowsPage'
 import { EscrowDetailPage } from './pages/EscrowDetailPage'
-import { NETWORKS, type NetworkKey } from './config/networks'
+import { NETWORKS, DEFAULT_NETWORK, isNetworkKey, type NetworkKey } from './config/networks'
 
 // ---------------------------------------------------------------------------
-// Minimal hash-based router
+// Minimal hash-based router. Every route names its network, so a copied link always opens the same escrow
+// on the same chain (escrow ids restart at 1 on each network):
+//   #mainnet/escrow/3   #testnet/escrow/3   #mainnet/new   #testnet/my-escrows   #testnet (home)
+// A link without a network (#escrow/3) opens on the default network and is rewritten to the explicit form.
 // ---------------------------------------------------------------------------
 
-function getRouteFromHash(): { page: string; params: Record<string, string> } {
-  const hash = window.location.hash.replace(/^#\/?/, '')
-  if (!hash) return { page: 'home', params: {} }
-  const [page, ...rest] = hash.split('/')
-  const params: Record<string, string> = {}
-  if (page === 'escrow' && rest[0]) params.id = rest[0]
-  return { page, params }
+interface Route {
+  page: string
+  params: Record<string, string>
+  network: NetworkKey | null
 }
 
-function setHash(page: string, params?: Record<string, string>) {
-  if (page === 'home') { window.location.hash = ''; return }
-  if (page === 'escrow' && params?.id) { window.location.hash = `escrow/${params.id}`; return }
-  window.location.hash = page
+function parseHash(raw: string): Route {
+  const parts = raw.replace(/^#\/?/, '').split('/').filter(Boolean)
+  let network: NetworkKey | null = null
+  if (parts[0] && isNetworkKey(parts[0])) network = parts.shift() as NetworkKey
+  const [page = 'home', ...rest] = parts
+  const params: Record<string, string> = {}
+  if (page === 'escrow' && rest[0]) params.id = rest[0].replace(/\D/g, '')
+  return { page, params, network }
+}
+
+function buildHash(network: NetworkKey, page: string, params?: Record<string, string>): string {
+  if (page === 'home') return network === DEFAULT_NETWORK ? '' : network
+  if (page === 'escrow' && params?.id) return `${network}/escrow/${params.id}`
+  return `${network}/${page}`
 }
 
 // ---------------------------------------------------------------------------
@@ -31,19 +41,32 @@ function setHash(page: string, params?: Record<string, string>) {
 // ---------------------------------------------------------------------------
 
 export default function App() {
-  const [networkKey, setNetworkKey] = useState<NetworkKey>('testnet')
-  const [route, setRoute] = useState(getRouteFromHash)
+  const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash))
+  const [networkKey, setNetworkKey] = useState<NetworkKey>(() => parseHash(window.location.hash).network ?? DEFAULT_NETWORK)
 
-  // Sync to hash changes (back/forward)
+  // Sync to hash changes (back/forward, pasted links). A link's network wins over the picker.
   useEffect(() => {
-    const handler = () => setRoute(getRouteFromHash())
+    const handler = () => {
+      const next = parseHash(window.location.hash)
+      setRoute(next)
+      if (next.network) setNetworkKey(next.network)
+    }
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
   }, [])
 
+  // Keep the address bar explicit about the network (also after a picker change) without adding history entries.
+  useEffect(() => {
+    const want = buildHash(networkKey, route.page, route.params)
+    const have = window.location.hash.replace(/^#\/?/, '')
+    if (have !== want) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${want ? `#${want}` : ''}`)
+    }
+  }, [networkKey, route])
+
   function navigate(page: string, params?: Record<string, string>) {
-    setHash(page, params)
-    setRoute({ page, params: params ?? {} })
+    window.location.hash = buildHash(networkKey, page, params)
+    setRoute({ page, params: params ?? {}, network: networkKey })
   }
 
   const { page, params } = route

@@ -53,11 +53,22 @@ export const NETWORKS: Record<NetworkKey, NetworkConfig> = {
   },
   mainnet: {
     chain: arcMainnet as unknown as typeof arcTestnet,
-    contractAddress: '', // deploy yourself, then fill this in
-    deploymentBlock: 0n,
+    // Deployed 2026-10-19 (byte-identical to the Studio-audited testnet build), source verified on explorer.arc.io
+    contractAddress: '0x7767a9bafc3ea961d0edf97a8aa69a7d5e38dae5',
+    deploymentBlock: 26686214n,
     explorerUrl: 'https://explorer.arc.io',
   },
 }
+
+/** Picker order: production network first. */
+export const NETWORK_KEYS: readonly NetworkKey[] = ['mainnet', 'testnet']
+
+export function isNetworkKey(value: string): value is NetworkKey {
+  return value === 'mainnet' || value === 'testnet'
+}
+
+/** Network shown on first load (links that name a network override it). Build with VITE_ARC_NETWORK=testnet for a testnet-first build. */
+export const DEFAULT_NETWORK: NetworkKey = import.meta.env.VITE_ARC_NETWORK === 'testnet' ? 'testnet' : 'mainnet'
 
 // ---------------------------------------------------------------------------
 // ABI — imported from the Foundry artifact (single source of truth)
