@@ -2,6 +2,8 @@
 
 **by Swift Bot Labs**
 
+**Live app:** https://demo-first-escrow.netlify.app (Arc Testnet; no wallet needed to browse escrows)
+
 Swift Bot Labs builds custom bots and automations for businesses. Every engagement starts with a working demo: the client sees the bot running before any money changes hands. This contract makes that promise enforceable on-chain for both sides. The client locks USDC in escrow before the project begins. The builder delivers a link to the live demo and records its hash on-chain. The client reviews and releases. If the builder misses the deadline, the client gets a full refund. If the client goes silent after delivery, the builder can claim automatically once the review window closes.
 
 ---
@@ -111,6 +113,18 @@ All transactions visible on [explorer.testnet.arc.io](https://explorer.testnet.a
 | claim | [0xad60b377…](https://explorer.testnet.arc.io/tx/0xad60b3777368387ace1c37202e4ae277b23257ee00ac0f8efb85ab55eb4d80e8) |
 | withdraw | [0xb8781aa5…](https://explorer.testnet.arc.io/tx/0xb8781aa5887d2885387fff092040c3daab4830cc119f8286e9b4f0a5d0dc25b1) |
 
+**Through the live app UI** (same contract; transactions submitted by clicking through the web app with an injected EIP-1193 test wallet holding throwaway testnet keys)
+
+| Escrow | Step | Tx hash |
+|---|---|---|
+| #4 | createEscrow (1.00 USDC) | [0x9800787b…](https://explorer.testnet.arc.io/tx/0x9800787bab6ec909f509c37dc19e5a8ba4a15ccae85993403377c08e77b0f365) |
+| #4 | deliver | [0xec06e1c8…](https://explorer.testnet.arc.io/tx/0xec06e1c801800dd1d673919fff38340ac15190873172d86591dcf6a8d45d9dd8) |
+| #4 | release | [0xd8d3c0e1…](https://explorer.testnet.arc.io/tx/0xd8d3c0e1b4db96101a565e1e328a3e9daf555475d3efcf7126191fe4910eedad) |
+| #4 | withdraw (builder) | [0xe8d3b3f4…](https://explorer.testnet.arc.io/tx/0xe8d3b3f4c287b2c73a4f4cbec9857ad20e5399cf7006ed8035a765b48f70dbe4) |
+| #5 | createEscrow (0.50 USDC) | [0xdf05c948…](https://explorer.testnet.arc.io/tx/0xdf05c94865989495bf8324f8af84bf5dfd737d0929989fc28837c11da1e1da03) |
+| #5 | refund after missed deadline | [0xc584db0a…](https://explorer.testnet.arc.io/tx/0xc584db0a2a59fd3f23f1351734bd981b363a34ec2450ac59c8d43ce4051712f5) |
+| #5 | withdraw (client) | [0x29be0d5f…](https://explorer.testnet.arc.io/tx/0x29be0d5f0136f45c82582e49e868f71afe3e3ba599e2ad25380fba63342c9db0) |
+
 ---
 
 ## Tests
@@ -120,7 +134,14 @@ The Foundry test suite in `contracts/test/DemoFirstEscrow.t.sol` covers:
 - **Happy paths:** create → deliver → release → withdraw; create → miss deadline → refund → withdraw; claim after review window; requestChanges → redeliver → release; builder cancel (funded and delivered states).
 - **Revert paths:** all input validation errors (`ZeroValue`, `AmountTooLarge`, `ZeroAddress`, `SelfEscrow`, `InvalidDeadline`, `InvalidReviewPeriod`, `TitleEmpty`, `TitleTooLong`, `URIEmpty`, `URITooLong`, `NoteTooLong`); wrong-status reverts; deadline and review-window timing guards; access control on every role-gated function.
 - **Fuzz:** amount round-trip over the full `uint128` range; review period over `[60, 30 days]`.
-- **Invariant (256 runs x 500 calls):** with a handler that settles and withdraws, `address(contract).balance == totalLocked` and the totals stay consistent.
+- **Invariants (256 runs x 500 calls = 128,000 calls, 0 reverts):** a stateful handler with 3 clients and 3 builders randomly creates, delivers, requests changes, releases, refunds, claims, cancels, withdraws and warps time. After every call:
+  - `address(escrow).balance == totalLocked + sum(pendingWithdrawals)`
+  - `deposited == totalLocked + totalReleased + totalRefunded`
+  - `deposited == address(escrow).balance + withdrawn`
+  - `totalLocked ==` sum of amounts of Funded/Delivered escrows
+  - Released and Refunded are terminal
+
+Result: 56 unit/fuzz tests + 5 invariants pass (`forge test`).
 - **Reentrancy:** a malicious builder contract that calls `withdraw()` from its `receive()` is blocked by the inline `_locked` guard.
 
 ```bash
@@ -133,7 +154,11 @@ forge test --gas-report
 
 ## Built with Arc Studio
 
-The contract, security review, Slither static analysis, unit tests, and testnet deployment were done in Arc Studio's Smart Contract mode. The React/TypeScript frontend was built in Arc Studio's Build mode.
+Everything here was built in [Arc Studio](https://studio.arc.io):
+
+- **Smart Contract mode:** contract written from our spec, two rounds of security review (which moved settlement to pull payments and added the `uint128` bound), Slither, the Foundry test suite, then deploy to Arc Testnet. A later Smart Contract turn rewrote the invariant suite (tests only, contract untouched).
+- **Build mode:** the React + wagmi/viem app against the deployed contract, with the testnet/mainnet network config, then fixes after an end-to-end test of the live app (refresh after confirmation, fee floor handling, RPC batching via Multicall3).
+- **Integrations:** pushed to GitHub and deployed to Netlify from the Studio workbench.
 
 ---
 
