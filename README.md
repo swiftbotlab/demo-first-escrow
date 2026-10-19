@@ -2,7 +2,9 @@
 
 **by Swift Bot Labs**
 
-**Live app:** https://demo-first-escrow.netlify.app (deployed from Arc Studio; no wallet needed to browse escrows). Mirror built from this repo by GitHub Actions: https://swiftbotlab.github.io/demo-first-escrow/
+**Live app:** https://demo-first-escrow.netlify.app (Arc **mainnet** by default, Arc Testnet selectable in the header; no wallet needed to browse escrows). Mirror built from this repo by GitHub Actions: https://swiftbotlab.github.io/demo-first-escrow/
+
+Escrow links name their network, e.g. [`#mainnet/escrow/2`](https://demo-first-escrow.netlify.app/#mainnet/escrow/2) or `#testnet/escrow/2`, so a shared link always opens the escrow it was copied from.
 
 Swift Bot Labs builds custom bots and automations for businesses. Every engagement starts with a working demo: the client sees the bot running before any money changes hands. This contract puts that promise on-chain. The client locks USDC in escrow before the project begins. The builder delivers a link to the live demo and records its hash on-chain. The client reviews and releases. If the builder misses the deadline, the client gets a full refund. If the client goes silent after delivery, the builder can claim automatically once the review window closes.
 
@@ -82,6 +84,10 @@ On Arc, a native USDC transfer using `.call{value: amount}("")` can revert. An a
 Both contracts are source-verified on the explorers (Blockscout): solc 0.8.28, optimizer 200 runs, EVM `paris`. The mainnet bytecode is byte-identical to the Studio-deployed testnet contract (Arc Studio deploys to testnet only).
 
 **First mainnet escrow (#1, 0.20 USDC, our own end-to-end run):** [create](https://explorer.arc.io/tx/0xf979c266b63d443a6837b9b44922ef1174ac4911543a37e2634e00bfceef8211) → [deliver](https://explorer.arc.io/tx/0x0f48bf70c66478fb3024a5e13de44d5b752e4f9f68b2cca2bb414c048d30c0a7) → [release](https://explorer.arc.io/tx/0xc1416d0b36ca7d8dcb3105539a14af5a0b44698bb6641b1ba39b0d76c5baa17a) → [withdraw](https://explorer.arc.io/tx/0xc8952f1b509fcd6ba78a045e4e4aea5afb6352a5b0fa20b38b295fe88682ffa1)
+
+**Mainnet escrow #2 through the live app UI (0.15 USDC, "Demo: landing page fix", 1-day deadline, 1-hour review):** [fund](https://explorer.arc.io/tx/0xfd9161d31b2e345f20f589641d8bd82ee4c5a8f86d9a8ecd03c4c6773986ff39) → [deliver](https://explorer.arc.io/tx/0x72830428398dce2bfb786f45d191a69e0e502816a244a044aeefc2fdae4d9bd4) → [release](https://explorer.arc.io/tx/0x49fd1902b8f1a8e7f2009a87d200b28e5dbefed2ea188473c7430674363c4533) → [withdraw](https://explorer.arc.io/tx/0x3edb2469c221e728aa334dc3bddb14b7eb4b0aaaecda4a122e00a8a8d4d22961) — open it: [`#mainnet/escrow/2`](https://demo-first-escrow.netlify.app/#mainnet/escrow/2)
+
+**Mainnet escrow #3, refund path through the live app UI (0.05 USDC, 10-minute deadline, no delivery):** [fund](https://explorer.arc.io/tx/0xf367575b2a34bf21f571bb3f8152f445d2ada5d27fec40bbf233df0cb047447d) → deadline passes → [refund](https://explorer.arc.io/tx/0x9989b3277989560417c509e8163a42dd91cb79857a9e654c4e768dcbc76b62b1) → [withdraw (client)](https://explorer.arc.io/tx/0x868ddeb5e72022fa7ff53c86027341836fb15b7ac2229516d311608ef70990bc) — open it: [`#mainnet/escrow/3`](https://demo-first-escrow.netlify.app/#mainnet/escrow/3)
 
 ---
 
