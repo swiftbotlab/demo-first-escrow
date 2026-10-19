@@ -1,0 +1,50 @@
+# Mirror of the app on GitHub Pages, built from this repo by GitHub Actions (the primary live app is deployed to
+# Netlify from Arc Studio). Network config, including the Arc mainnet contract address, lives in src/config/networks.ts.
+name: Deploy app to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - name: Install dependencies (lockfile)
+        run: bun install --frozen-lockfile
+      - name: Provide the contract ABI where the app imports it
+        # contracts/out is a build folder (gitignored); the ABI is committed in contracts/contract-metadata.
+        run: |
+          if [ ! -f contracts/out/DemoFirstEscrow.sol/DemoFirstEscrow.json ]; then
+            mkdir -p contracts/out/DemoFirstEscrow.sol
+            jq '{abi: .abi}' contracts/contract-metadata/DemoFirstEscrow.json > contracts/out/DemoFirstEscrow.sol/DemoFirstEscrow.json
+          fi
+      - name: Build
+        run: ./node_modules/.bin/vite build --base=/${{ github.event.repository.name }}/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
