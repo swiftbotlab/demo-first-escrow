@@ -23,6 +23,7 @@ const DEADLINE_PRESETS = [
 
 const REVIEW_PRESETS = [
   { label: '2 min (test)', secs: 120 },
+  { label: '1 hour', secs: 3600 },
   { label: '1 day', secs: 86400 },
   { label: '3 days', secs: 86400 * 3 },
 ]
