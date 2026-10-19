@@ -2,9 +2,9 @@
 
 **by Swift Bot Labs**
 
-**Live app:** https://demo-first-escrow.netlify.app (Arc Testnet; no wallet needed to browse escrows)
+**Live app:** https://demo-first-escrow.netlify.app (deployed from Arc Studio; no wallet needed to browse escrows). Mirror built from this repo by GitHub Actions: https://swiftbotlab.github.io/demo-first-escrow/
 
-Swift Bot Labs builds custom bots and automations for businesses. Every engagement starts with a working demo: the client sees the bot running before any money changes hands. This contract makes that promise enforceable on-chain for both sides. The client locks USDC in escrow before the project begins. The builder delivers a link to the live demo and records its hash on-chain. The client reviews and releases. If the builder misses the deadline, the client gets a full refund. If the client goes silent after delivery, the builder can claim automatically once the review window closes.
+Swift Bot Labs builds custom bots and automations for businesses. Every engagement starts with a working demo: the client sees the bot running before any money changes hands. This contract puts that promise on-chain. The client locks USDC in escrow before the project begins. The builder delivers a link to the live demo and records its hash on-chain. The client reviews and releases. If the builder misses the deadline, the client gets a full refund. If the client goes silent after delivery, the builder can claim automatically once the review window closes.
 
 ---
 
@@ -25,7 +25,7 @@ Client                    Contract                  Builder
   |                          |<------- withdraw() ------|
 ```
 
-The builder can walk away at any time before release by calling `cancel()`, which refunds the client. During the review window the client can call `requestChanges()`: the escrow goes back to Funded and the delivery deadline moves to at least one review period from now, so the builder always has time to fix.
+The builder can walk away at any time before release by calling `cancel()`, which refunds the client. During the review window the client can call `requestChanges()`: the escrow goes back to Funded and the delivery deadline moves to at least one review period from now. In this version (v1) the client picks the review period (minimum 60 s) and there is no cap on change requests; see Limitations. Version 2, in progress, caps change requests at two, gives the builder at least one day per fix, and lets the client turn down the final delivery.
 
 ### State table
 
@@ -77,9 +77,11 @@ On Arc, a native USDC transfer using `.call{value: amount}("")` can revert. An a
 | Chain | Address | Deploy tx |
 |---|---|---|
 | Arc Testnet | [`0xbb250819e407a108e652cbcf36b45efdd6a3e4c0`](https://explorer.testnet.arc.io/address/0xbb250819e407a108e652cbcf36b45efdd6a3e4c0) | [`0x72bdfc6e…`](https://explorer.testnet.arc.io/tx/0x72bdfc6e2c00e9b5ac5ed975f281a5bb731e8ec631995b719124a44f92039a0a) |
-| Arc Mainnet | coming soon | — |
+| Arc Mainnet (v1) | [`0x7767a9bafc3ea961d0edf97a8aa69a7d5e38dae5`](https://explorer.arc.io/address/0x7767a9bafc3ea961d0edf97a8aa69a7d5e38dae5) | [`0xde33dbfb…`](https://explorer.arc.io/tx/0xde33dbfb014e0b8475c672fbd42bc11e3f6c1155a7d19f455fd94dc9fc2a31ec) |
 
-The testnet contract source is verified on the explorer (Blockscout): solc 0.8.28, optimizer 200 runs, EVM `paris`.
+Both contracts are source-verified on the explorers (Blockscout): solc 0.8.28, optimizer 200 runs, EVM `paris`. The mainnet bytecode is byte-identical to the Studio-deployed testnet contract (Arc Studio deploys to testnet only).
+
+**First mainnet escrow (#1, 0.20 USDC, our own end-to-end run):** [create](https://explorer.arc.io/tx/0xf979c266b63d443a6837b9b44922ef1174ac4911543a37e2634e00bfceef8211) → [deliver](https://explorer.arc.io/tx/0x0f48bf70c66478fb3024a5e13de44d5b752e4f9f68b2cca2bb414c048d30c0a7) → [release](https://explorer.arc.io/tx/0xc1416d0b36ca7d8dcb3105539a14af5a0b44698bb6641b1ba39b0d76c5baa17a) → [withdraw](https://explorer.arc.io/tx/0xc8952f1b509fcd6ba78a045e4e4aea5afb6352a5b0fa20b38b295fe88682ffa1)
 
 ---
 
@@ -165,11 +167,12 @@ Everything here was built in [Arc Studio](https://studio.arc.io):
 ## Run the app locally
 
 ```bash
-bun install
+bun install      # app deps, and OpenZeppelin for contracts/script (Studio's CREATE2 deploy helper)
+forge build      # writes contracts/out/, where src/config/networks.ts imports the ABI from
 bun run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The app reads from Arc Testnet by default; no wallet is required to browse existing escrows.
+Open [http://localhost:5173](http://localhost:5173). The app reads from Arc Testnet by default; no wallet is required to browse existing escrows. `forge test` also needs `bun install` first, for the same OpenZeppelin import.
 
 ---
 
@@ -177,6 +180,12 @@ Open [http://localhost:5173](http://localhost:5173). The app reads from Arc Test
 
 - **No third-party arbiter.** Disputes are settled by the parties directly (client releases / builder cancels / deadline enforced automatically). There is no arbiter role by design — adding one would require custody of a private key or a separate governance contract.
 - **Not audited by a paid third party.** The contract has been reviewed with automated tools and a structured internal review, but has not been independently audited. Do not use with large sums without a professional audit.
+- **Change requests (v1).** `requestChanges()` has no cap, and the new deadline is now + `reviewPeriod`, which the client picks (minimum 60 s). An active client can keep asking for changes, so the builder can't force payment; and with a short review period the builder may get very little time to fix before the client can refund. Builders: don't accept short review periods.
+- **After a delivery (v1).** Once the builder delivers on time, the client can't get a refund without the builder's cooperation (cancel), and if the client misses a review window anyone can trigger the payout to the builder. There is no arbiter.
+- **Deadline (v1).** `deliverBy` has no upper bound; a far-future deadline means only the builder can free the funds (by cancelling).
+- **Stray USDC.** USDC sent to the contract outside `createEscrow` (for example through the 6-decimal ERC-20 interface) is not credited to anyone and can't be recovered; there is no owner and no sweep.
+- **Recipients.** A recipient that can't receive native USDC (blocklisted, or a contract without a payable `receive`) can't withdraw; the balance stays credited.
+- **Public data.** Titles, demo links and change-request notes are public on-chain forever. The app's delivery hash is the hash of the link, not of the delivered build.
 - **`escrowsOf` can be spammed.** Anyone who funds an escrow (any non-zero amount) naming your address as the builder adds an entry to your `escrowsOf` list. The list is append-only on-chain; treat escrows you did not agree to as noise.
 
 ---
