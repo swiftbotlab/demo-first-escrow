@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi'
-import { decodeEventLog } from 'viem'
+import { createPublicClient, http, decodeEventLog } from 'viem'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { ConnectKitButton } from 'connectkit'
 import { NETWORKS, ESCROW_ABI, type NetworkKey } from '../config/networks'
@@ -12,7 +12,7 @@ interface Props {
   onNav: (page: string, params?: Record<string, string>) => void
 }
 
-const MIN_FEE = 20_000_000_000n // 20 gwei
+const MIN_FEE = 20_000_000_000n // 20 gwei — Arc floor, used as minimum only
 
 const DEADLINE_PRESETS = [
   { label: '10 min (test)', secs: 60 * 10 },
@@ -75,9 +75,22 @@ export function NewEscrowPage({ networkKey, onNav }: Props) {
     return BigInt(Math.floor(Date.now() / 1000) + deadlineSecs)
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!contractAddress || !ready) return
     const deliverBy = getDeliverBy()
+    // Estimate fees from chain; only enforce the 20 gwei floor as a minimum
+    let maxFeePerGas: bigint
+    try {
+      const publicClient = createPublicClient({
+        chain: net.chain,
+        transport: http(net.chain.rpcUrls.default.http[0]),
+      })
+      const est = await publicClient.estimateFeesPerGas()
+      const estimated = est.maxFeePerGas ?? 0n
+      maxFeePerGas = estimated > MIN_FEE ? estimated : MIN_FEE
+    } catch {
+      maxFeePerGas = MIN_FEE
+    }
     writeContract({
       address: contractAddress,
       abi: ESCROW_ABI,
@@ -85,7 +98,7 @@ export function NewEscrowPage({ networkKey, onNav }: Props) {
       args: [builder as `0x${string}`, deliverBy, BigInt(reviewSecs), title.trim()],
       value: parsedAmount,
       chainId: net.chain.id,
-      maxFeePerGas: MIN_FEE,
+      maxFeePerGas,
     })
   }
 
@@ -276,7 +289,7 @@ export function NewEscrowPage({ networkKey, onNav }: Props) {
           </button>
         ) : (
           <button
-            onClick={handleSubmit}
+            onClick={() => { void handleSubmit() }}
             disabled={!ready || isPending || isConfirming}
             className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-semibold text-white transition-all hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
             style={{ background: 'var(--accent)' }}

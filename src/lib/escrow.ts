@@ -21,7 +21,25 @@ function clientFor(key: NetworkKey) {
   return createPublicClient({
     chain: net.chain,
     transport: http(net.chain.rpcUrls.default.http[0]),
+    batch: { multicall: { wait: 16 } },
   })
+}
+
+/** Retry a promise up to `attempts` times with exponential backoff on rate-limit errors. */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseMs = 400): Promise<T> {
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      lastErr = e
+      const msg = String(e).toLowerCase()
+      const isRateLimit = msg.includes('rate limit') || msg.includes('too many') || msg.includes('429')
+      if (!isRateLimit || i === attempts - 1) throw e
+      await new Promise((r) => setTimeout(r, baseMs * 2 ** i))
+    }
+  }
+  throw lastErr
 }
 
 export interface EscrowLog {
@@ -98,12 +116,15 @@ export async function fetchContractStats(networkKey: NetworkKey) {
   }
   const client = clientFor(networkKey)
   const addr = net.contractAddress
-  const [escrowCount, totalLocked, totalReleased, totalRefunded] = await Promise.all([
-    client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'escrowCount' }),
-    client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'totalLocked' }),
-    client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'totalReleased' }),
-    client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'totalRefunded' }),
-  ])
+  // These four reads are batched into one multicall by viem's batch transport.
+  const [escrowCount, totalLocked, totalReleased, totalRefunded] = await withRetry(() =>
+    Promise.all([
+      client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'escrowCount' }),
+      client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'totalLocked' }),
+      client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'totalReleased' }),
+      client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'totalRefunded' }),
+    ])
+  )
   return {
     escrowCount: escrowCount as bigint,
     totalLocked: totalLocked as bigint,
@@ -134,14 +155,15 @@ export async function fetchRecentEscrows(
   if (!net.contractAddress) return []
   const client = clientFor(networkKey)
   const addr = net.contractAddress
-  const total = (await client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'escrowCount' })) as bigint
+  const total = (await withRetry(() => client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'escrowCount' }))) as bigint
   if (total === 0n) return []
   const from = total > BigInt(count) ? total - BigInt(count) + 1n : 1n
   const ids: bigint[] = []
   for (let id = total; id >= from; id--) ids.push(id)
-  const results = await Promise.allSettled(
+  // All getEscrow calls are batched into one multicall by viem's batch transport.
+  const results = await withRetry(() => Promise.allSettled(
     ids.map((id) => client.readContract({ address: addr, abi: ESCROW_ABI, functionName: 'getEscrow', args: [id] })),
-  )
+  ))
   const out: EscrowSummary[] = []
   for (let i = 0; i < ids.length; i++) {
     const r = results[i]

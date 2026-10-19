@@ -5,7 +5,7 @@ import { HomePage } from './pages/HomePage'
 import { NewEscrowPage } from './pages/NewEscrowPage'
 import { MyEscrowsPage } from './pages/MyEscrowsPage'
 import { EscrowDetailPage } from './pages/EscrowDetailPage'
-import type { NetworkKey } from './config/networks'
+import { NETWORKS, type NetworkKey } from './config/networks'
 
 // ---------------------------------------------------------------------------
 // Minimal hash-based router
@@ -80,14 +80,18 @@ export default function App() {
             <span>by Swift Bot Labs</span>
           </div>
           <div className="flex items-center gap-4">
-            <a
-              href={`${networkKey === 'testnet' ? 'https://testnet.arcscan.app' : 'https://explorer.arc.io'}/address/${import.meta.env.VITE_CONTRACT_ADDRESS ?? ''}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:underline"
-            >
-              Contract on explorer
-            </a>
+            {NETWORKS[networkKey].contractAddress ? (
+              <a
+                href={`${NETWORKS[networkKey].explorerUrl}/address/${NETWORKS[networkKey].contractAddress}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:underline"
+              >
+                Contract on explorer
+              </a>
+            ) : (
+              <span style={{ color: 'var(--subtle)' }}>Mainnet contract not deployed yet</span>
+            )}
             <a
               href="https://github.com/swiftbotlab/demo-first-escrow"
               target="_blank"

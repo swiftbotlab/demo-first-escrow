@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
-import { useAccount, useWriteContract, useSwitchChain } from 'wagmi'
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain, useReadContract } from 'wagmi'
 import { createPublicClient, http, keccak256, toHex } from 'viem'
-import { ArrowLeft, ExternalLink, Clock } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Clock, CheckCircle2 } from 'lucide-react'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
 import { NETWORKS, ESCROW_ABI, buildTxUrl, buildAddressUrl, type NetworkKey } from '../config/networks'
@@ -79,10 +79,53 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
   // --- Changes note ---
   const [changesNote, setChangesNote] = useState('')
 
+  // Per-action pending state: track the last submitted tx hash and which action it was for
+  const [lastHash, setLastHash] = useState<`0x${string}` | undefined>()
+  const [lastAction, setLastAction] = useState<string>('')
+
   const { writeContract, isPending: globalPending } = useWriteContract()
 
-  function writeAction(fn: string, args: unknown[]) {
+  // Watch the last tx; on confirmation refetch escrow + pending balance + logs
+  const { isLoading: isConfirming, isSuccess: txConfirmed, data: txReceipt } = useWaitForTransactionReceipt({ hash: lastHash })
+
+  // Pending withdrawal balance (re-read after each confirmed tx)
+  const { refetch: refetchPending } = useReadContract({
+    address: contractAddress,
+    abi: ESCROW_ABI,
+    functionName: 'pendingWithdrawals',
+    args: address ? [address] : undefined,
+    chainId: net.chain.id,
+    query: { enabled: false },
+  })
+
+  useEffect(() => {
+    if (!txConfirmed || !txReceipt) return
+    // Refetch escrow data, logs, and pending withdrawal after tx confirms
+    refresh()
+    void refetchPending()
+    let cancelled = false
+    fetchEscrowLogs(networkKey, id)
+      .then((l) => { if (!cancelled) setLogs(l) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txConfirmed])
+
+  const MIN_FEE = 20_000_000_000n // 20 gwei floor
+
+  async function writeAction(fn: string, args: unknown[]) {
     if (!contractAddress) return
+    // Estimate fees from chain; enforce >= 20 gwei floor
+    let maxFeePerGas: bigint | undefined
+    try {
+      const publicClient = createPublicClient({ chain: chainObj, transport: http(chainRpc) })
+      const est = await publicClient.estimateFeesPerGas()
+      const estimated = est.maxFeePerGas ?? 0n
+      maxFeePerGas = estimated > MIN_FEE ? estimated : MIN_FEE
+    } catch {
+      maxFeePerGas = MIN_FEE
+    }
+    setLastAction(fn)
     writeContract(
       {
         address: contractAddress,
@@ -90,12 +133,27 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
         functionName: fn,
         args: args,
         chainId: net.chain.id,
-        maxFeePerGas: 20_000_000_000n,
+        maxFeePerGas,
       },
       {
-        onSuccess: () => toast.success(`${fn} submitted`),
+        onSuccess: (hash) => { setLastHash(hash); toast.success('Transaction submitted') },
         onError: (e) => {
-          if (!e.message.includes('user rejected')) toast.error(e.message.split('\n')[0].slice(0, 100))
+          // Surface real error; skip the wallet-rejection noise
+          const msg = e.message ?? ''
+          if (
+            msg.toLowerCase().includes('user rejected') ||
+            msg.toLowerCase().includes('user denied') ||
+            msg.toLowerCase().includes('rejected the request')
+          ) return
+          // Extract the first meaningful line, stripping viem's boilerplate preamble
+          const clean = msg
+            .split('\n')
+            .map((l: string) => l.trim())
+            .filter((l: string) => l.length > 0 && !l.startsWith('Request Arguments') && !l.startsWith('Details:') && !l.startsWith('Version:'))
+            .slice(0, 2)
+            .join(' — ')
+            .slice(0, 160)
+          toast.error(clean || 'Transaction failed')
         },
       },
     )
@@ -221,6 +279,34 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
         )}
       </div>
 
+      {/* Tx receipt banner — shown while confirming or just confirmed */}
+      {(isConfirming || txConfirmed) && lastHash && (
+        <div
+          className="mt-4 flex items-center gap-3 rounded-2xl px-4 py-3"
+          style={{
+            background: txConfirmed ? 'rgba(26,128,71,0.08)' : 'rgba(18,45,69,0.06)',
+            border: `1px solid ${txConfirmed ? 'rgba(26,128,71,0.25)' : 'var(--border)'}`,
+          }}
+        >
+          {txConfirmed
+            ? <CheckCircle2 size={16} style={{ color: 'var(--success)', flexShrink: 0 }} />
+            : <span className="size-4 rounded-full border-2 border-current border-t-transparent animate-spin flex-shrink-0" style={{ color: 'var(--muted)' }} />
+          }
+          <span className="text-sm font-medium" style={{ color: txConfirmed ? 'var(--success)' : 'var(--muted)' }}>
+            {txConfirmed ? `${lastAction} confirmed` : 'Confirming…'}
+          </span>
+          <a
+            href={buildTxUrl(networkKey, lastHash)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto flex items-center gap-1 text-xs font-medium"
+            style={{ color: 'var(--accent-hover)' }}
+          >
+            Explorer <ExternalLink size={11} />
+          </a>
+        </div>
+      )}
+
       {/* Actions */}
       {!isTerminal && address && !wrongChain && (
         <div
@@ -246,9 +332,10 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
                 </p>
               )}
               <TxButton
-                onClick={() => !wrongChain && writeAction('deliver', [id, deliverURI, deliverHash])}
+                onClick={() => { if (!wrongChain) void writeAction('deliver', [id, deliverURI, deliverHash]) }}
                 disabled={!deliverURI || deliverURI.length > 300}
                 isPending={globalPending}
+                isConfirming={isConfirming}
                 disabledReason={!deliverURI ? 'Enter a demo URL' : 'URL too long'}
               >
                 Submit delivery
@@ -262,8 +349,9 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
           {/* BUILDER: cancel */}
           {isBuilder && (status === 1 || status === 2) && (
             <TxButton
-              onClick={() => writeAction('cancel', [id])}
+              onClick={() => { void writeAction('cancel', [id]) }}
               isPending={globalPending}
+              isConfirming={isConfirming}
               variant="ghost"
             >
               Cancel & refund client
@@ -273,8 +361,9 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
           {/* CLIENT: release */}
           {isClient && (status === 1 || status === 2) && (
             <TxButton
-              onClick={() => writeAction('release', [id])}
+              onClick={() => { void writeAction('release', [id]) }}
               isPending={globalPending}
+              isConfirming={isConfirming}
             >
               Release payment
             </TxButton>
@@ -293,8 +382,9 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
                 style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
               />
               <TxButton
-                onClick={() => writeAction('requestChanges', [id, changesNote])}
+                onClick={() => { void writeAction('requestChanges', [id, changesNote]) }}
                 isPending={globalPending}
+                isConfirming={isConfirming}
                 variant="ghost"
                 disabled={new TextEncoder().encode(changesNote).length > 300}
                 disabledReason="Note too long (max 300 bytes)"
@@ -307,8 +397,9 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
           {/* CLIENT: refund */}
           {isClient && status === 1 && (
             <TxButton
-              onClick={() => writeAction('refund', [id])}
+              onClick={() => { void writeAction('refund', [id]) }}
               isPending={globalPending}
+              isConfirming={isConfirming}
               variant={deadlinePassed ? 'danger' : 'ghost'}
               disabled={!deadlinePassed}
               disabledReason={!deadlinePassed ? `Available after deadline · ${fmtTimestamp(escrow.deliverBy)}` : undefined}
@@ -320,8 +411,9 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
           {/* ANYONE: claim for builder */}
           {status === 2 && reviewExpired && (
             <TxButton
-              onClick={() => writeAction('claim', [id])}
+              onClick={() => { void writeAction('claim', [id]) }}
               isPending={globalPending}
+              isConfirming={isConfirming}
             >
               Claim for builder (review window expired)
             </TxButton>
