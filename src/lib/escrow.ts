@@ -1,8 +1,10 @@
 /**
  * Event log fetcher for DemoFirstEscrow.
  *
- * Arc RPC limits eth_getLogs to <10 000 blocks per request.
- * We scan in 9 000-block chunks, a few in parallel, forward from deployment block.
+ * Arc's public RPC caps eth_getLogs at a ~10k-block range and throttles parallel
+ * bursts with -32005. We scan SEQUENTIALLY in 9k-block chunks with retry/backoff
+ * (see ./logscan) and cache decoded results in localStorage so reloads only scan
+ * the new tail instead of rescanning from the deployment block.
  */
 
 import {
@@ -12,9 +14,12 @@ import {
   type Log,
 } from 'viem'
 import { NETWORKS, ESCROW_ABI, type NetworkKey } from '../config/networks'
-
-const CHUNK = 9_000n
-const PARALLEL = 4
+import {
+  scanLogsSequential,
+  readScanCache,
+  writeScanCache,
+  isRateLimitError,
+} from './logscan'
 
 function clientFor(key: NetworkKey) {
   const net = NETWORKS[key]
@@ -26,17 +31,15 @@ function clientFor(key: NetworkKey) {
 }
 
 /** Retry a promise up to `attempts` times with exponential backoff on rate-limit errors. */
-async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseMs = 400): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, attempts = 5, baseMs = 500): Promise<T> {
   let lastErr: unknown
   for (let i = 0; i < attempts; i++) {
     try {
       return await fn()
     } catch (e) {
       lastErr = e
-      const msg = String(e).toLowerCase()
-      const isRateLimit = msg.includes('rate limit') || msg.includes('too many') || msg.includes('429')
-      if (!isRateLimit || i === attempts - 1) throw e
-      await new Promise((r) => setTimeout(r, baseMs * 2 ** i))
+      if (!isRateLimitError(e) || i === attempts - 1) throw e
+      await new Promise((r) => setTimeout(r, baseMs * 2 ** i + Math.floor(Math.random() * 200)))
     }
   }
   throw lastErr
@@ -47,63 +50,92 @@ export interface EscrowLog {
   args: Record<string, unknown>
   blockNumber: bigint
   transactionHash: `0x${string}`
+  logIndex?: number
+}
+
+export interface FetchLogsResult {
+  logs: EscrowLog[]
+  /** false if some chunks still failed after retries — the timeline is partial. */
+  complete: boolean
+}
+
+function sortLogs(logs: EscrowLog[]): EscrowLog[] {
+  return [...logs].sort((a, b) => {
+    if (a.blockNumber !== b.blockNumber) return a.blockNumber < b.blockNumber ? -1 : 1
+    return (a.logIndex ?? 0) - (b.logIndex ?? 0)
+  })
+}
+
+function dedupe(logs: EscrowLog[]): EscrowLog[] {
+  const seen = new Set<string>()
+  const out: EscrowLog[] = []
+  for (const l of logs) {
+    const key = `${l.transactionHash}:${l.blockNumber.toString()}:${l.eventName}:${l.logIndex ?? 0}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(l)
+  }
+  return out
 }
 
 /**
  * Fetch all events for a specific escrow id.
- * Scans forward from deployment block in 9k-block chunks (PARALLEL at a time).
- * Returns logs sorted oldest-first.
+ * Sequential 9k-block scan with retry/backoff, incremental localStorage cache.
+ * Returns logs oldest-first plus `complete` (false => timeline is still partial).
  */
 export async function fetchEscrowLogs(
   networkKey: NetworkKey,
   escrowId: bigint,
-): Promise<EscrowLog[]> {
+): Promise<FetchLogsResult> {
   const net = NETWORKS[networkKey]
-  if (!net.contractAddress) return []
+  if (!net.contractAddress) return { logs: [], complete: true }
 
   const client = clientFor(networkKey)
   const addr = net.contractAddress
-  const head = await client.getBlockNumber()
-  const start = net.deploymentBlock > 0n ? net.deploymentBlock : head - 180_000n
+  const chainId = net.chain.id
+  const deployStart = net.deploymentBlock > 0n ? net.deploymentBlock : 0n
+  const cacheKey = `escrow:${chainId}:${addr.toLowerCase()}:${escrowId.toString()}`
 
-  // Build chunk ranges
-  const ranges: Array<{ from: bigint; to: bigint }> = []
-  let from = start
-  while (from <= head) {
-    const to = from + CHUNK - 1n < head ? from + CHUNK - 1n : head
-    ranges.push({ from, to })
-    from = to + 1n
+  const cached = readScanCache<EscrowLog>(cacheKey)
+  const haveCache = !!cached && cached.lastScanned >= deployStart - 1n
+  const existing: EscrowLog[] = haveCache ? cached!.items : []
+  const fromBlock = haveCache ? cached!.lastScanned + 1n : deployStart
+
+  const head = await withRetry(() => client.getBlockNumber())
+
+  if (fromBlock > head) {
+    return { logs: sortLogs(existing), complete: true }
   }
 
-  const results: EscrowLog[] = []
+  const { logs: raw, complete, lastScanned } = await scanLogsSequential(
+    client,
+    fromBlock,
+    head,
+    { address: addr },
+  )
 
-  // Process in groups of PARALLEL
-  for (let i = 0; i < ranges.length; i += PARALLEL) {
-    const batch = ranges.slice(i, i + PARALLEL)
-    const settled = await Promise.allSettled(
-      batch.map(({ from, to }) =>
-        client.getLogs({ address: addr, fromBlock: from, toBlock: to }),
-      ),
-    )
-    for (const res of settled) {
-      if (res.status !== 'fulfilled') continue
-      for (const log of res.value) {
-        const decoded = tryDecodeLog(log)
-        if (!decoded) continue
-        const args = decoded.args as Record<string, unknown>
-        if ('id' in args && args.id === escrowId) {
-          results.push({
-            eventName: decoded.eventName,
-            args,
-            blockNumber: log.blockNumber ?? 0n,
-            transactionHash: (log.transactionHash ?? '0x'),
-          })
-        }
-      }
+  const fresh: EscrowLog[] = []
+  for (const log of raw) {
+    const decoded = tryDecodeLog(log as unknown as Log)
+    if (!decoded) continue
+    const args = decoded.args as Record<string, unknown>
+    if ('id' in args && args.id === escrowId) {
+      fresh.push({
+        eventName: decoded.eventName,
+        args,
+        blockNumber: (log.blockNumber as bigint | null) ?? 0n,
+        transactionHash: ((log.transactionHash as string | null) ?? '0x') as `0x${string}`,
+        logIndex: (log.logIndex as number | null) ?? 0,
+      })
     }
   }
 
-  return results.sort((a, b) => (a.blockNumber < b.blockNumber ? -1 : 1))
+  const sorted = sortLogs(dedupe([...existing, ...fresh]))
+
+  // Persist up to the last fully-scanned block so a partial run resumes correctly.
+  writeScanCache(cacheKey, complete ? head : lastScanned, sorted)
+
+  return { logs: sorted, complete }
 }
 
 /**

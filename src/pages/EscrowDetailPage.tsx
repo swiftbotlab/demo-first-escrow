@@ -43,6 +43,17 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
   const [loading, setLoading] = useState(true)
   const [logs, setLogs] = useState<EscrowLog[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
+  const [logsComplete, setLogsComplete] = useState(true)
+
+  const loadLogs = useCallback(() => {
+    if (!contractAddress || id === 0n) return
+    setLogsLoading(true)
+    fetchEscrowLogs(networkKey, id)
+      .then((r) => { setLogs(r.logs); setLogsComplete(r.complete) })
+      .catch(() => { setLogsComplete(false) })
+      .finally(() => { setLogsLoading(false) })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractAddress, id, networkKey])
 
   // Re-render once a second so time-gated actions (refund after the deadline, claim after the review window)
   // enable the moment the clock crosses them, without a page reload.
@@ -69,16 +80,7 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
 
   useEffect(() => { refresh() }, [refresh])
 
-  useEffect(() => {
-    if (!contractAddress || id === 0n) return
-    let cancelled = false
-    setLogsLoading(true)
-    fetchEscrowLogs(networkKey, id)
-      .then((l) => { if (!cancelled) setLogs(l) })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLogsLoading(false) })
-    return () => { cancelled = true }
-  }, [contractAddress, id, networkKey])
+  useEffect(() => { loadLogs() }, [loadLogs])
 
   // --- Deliver form ---
   const [deliverURI, setDeliverURI] = useState('')
@@ -111,11 +113,7 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
     // Refetch escrow data, logs, and pending withdrawal after tx confirms
     refresh()
     void refetchPending()
-    let cancelled = false
-    fetchEscrowLogs(networkKey, id)
-      .then((l) => { if (!cancelled) setLogs(l) })
-      .catch(() => {})
-    return () => { cancelled = true }
+    loadLogs()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txConfirmed])
 
@@ -468,9 +466,20 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
 
       {/* Event timeline */}
       <div className="mt-6">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-widest" style={{ color: 'var(--muted)' }}>
-          Timeline
-        </h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-widest" style={{ color: 'var(--muted)' }}>
+            Timeline
+          </h2>
+          {!logsLoading && !logsComplete && (
+            <button
+              onClick={loadLogs}
+              className="text-xs font-medium"
+              style={{ color: 'var(--accent-hover)' }}
+            >
+              Some history still loading · Retry
+            </button>
+          )}
+        </div>
         {logsLoading ? (
           <div className="space-y-2">
             {Array.from({ length: 2 }).map((_, i) => (
@@ -479,7 +488,7 @@ export function EscrowDetailPage({ escrowId, networkKey, onNav }: Props) {
           </div>
         ) : logs.length === 0 ? (
           <p className="text-sm" style={{ color: 'var(--muted)' }}>
-            No events found.{' '}
+            {logsComplete ? 'No events found.' : 'History still loading — tap Retry above.'}{' '}
             <a
               href={buildAddressUrl(networkKey, net.contractAddress)}
               target="_blank"
