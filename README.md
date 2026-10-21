@@ -162,7 +162,10 @@ forge test --gas-report
 
 ## Built with Arc Studio
 
-Everything here was built in [Arc Studio](https://studio.arc.io):
+Everything here was built in [Arc Studio](https://studio.arc.io/app/df27de16-e3d0-4d9c-b748-7a4c900c64e9):
+
+**Video walkthrough:** https://github.com/swiftbotlab/demo-first-escrow/releases/download/v1.0.0/demo-first-escrow-arc-studio-mainnet.mp4
+
 
 - **Smart Contract mode:** contract written from our spec, two rounds of security review (which moved settlement to pull payments and added the `uint128` bound), Slither, the Foundry test suite, then deploy to Arc Testnet. A later Smart Contract turn rewrote the invariant suite (tests only, contract untouched).
 - **Build mode:** the React + wagmi/viem app against the deployed contract, with the testnet/mainnet network config, then fixes after an end-to-end test of the live app (refresh after confirmation, fee floor handling, RPC batching via Multicall3).
